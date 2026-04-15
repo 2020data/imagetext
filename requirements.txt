@@ -4,3 +4,4 @@ openai-whisper
 Pillow
 numpy
 scipy # 一些 Whisper 依賴項
+ffmpeg
