@@ -127,7 +127,7 @@ def main():
     st.set_page_config(page_title="圖文語音記錄器", page_icon="📸")
 
     st.title("📸 圖文語音記錄器")
-    st.write("上傳照片、錄音（中文），自動轉文字並合成一張帶有說明的卡片。')
+    st.write("上傳照片、錄音（中文），自動轉文字並合成一張帶有說明的卡片📸")
 
     # --- Step 1: 圖片上傳 ---
     uploaded_image = st.file_uploader("1. 上傳照片 (JPG/PNG)", type=["jpg", "png", "jpeg"])
