@@ -1,4 +1,6 @@
 streamlit
-Pillow
+streamlit-mic-recorder
 openai-whisper
-setuptools-rust
+Pillow
+numpy
+scipy # 一些 Whisper 依賴項
