@@ -1,209 +1,108 @@
 import streamlit as st
-from streamlit_mic_recorder import mic_recorder
-import whisper
-import os
-import io
-import datetime
 from PIL import Image, ImageDraw, ImageFont
+import io
+import os
 
-# --- 1. 項目設置與環境配置 ---
-# 請確保以下文件在項目根目錄：
-FONT_PATH = "NotoSansCJKtc-Regular.ttf" 
+# --- 頁面設定 ---
+st.set_page_config(page_title="老照片加字幕小工具", page_icon="📸", layout="centered")
 
-# --- 2. 加載與緩存 Whisper 模型 ---
-@st.cache_resource
-def load_whisper_model():
-    st.info("🔄 正在加載語音辨識模型，第一次可能需要一些時間...")
-    model = whisper.load_model("small")
-    st.success("✅ 語音辨識模型加載完成！")
-    return model
-
-model = load_whisper_model()
-
-# --- 3. 核心功能函數 ---
-
-def transcribe_audio_bytes(audio_bytes):
-    """將音頻位元組轉換為文字"""
-    if not audio_bytes:
-        return ""
-
-    import tempfile
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_wav:
-        temp_wav.write(audio_bytes)
-        temp_wav_path = temp_wav.name
-
-    st.info("🔄 正在進行語音轉文字辨識...")
-    result = model.transcribe(temp_wav_path, language="zh")
-    os.remove(temp_wav_path)
-
-    return result["text"]
-
-def combine_image_text(uploaded_image, text, font_scale=1.0):
+# --- 輔助函式：尋找中文字體 ---
+def get_chinese_font(size):
     """
-    將圖片與文字合併，支援動態字體比例 (font_scale) 調整
+    嘗試尋找系統中可用的中文字體。
+    如果都找不到，請將字體檔（如 msjh.ttc 或 NotoSansTC.ttf）放在與 app.py 同一個資料夾，
+    並將檔名加到下方清單中。
     """
-    img = Image.open(uploaded_image).convert("RGB")
-    width, height = img.size
-
-    # --- ✨ 結合黃金比例與手動縮放 ✨ ---
-    # 基礎字體大小為圖片寬度的 3.5%，乘上使用者手動拉動的 scale 比例
-    base_font_size = width * 0.035
-    font_size = max(int(base_font_size * font_scale), 16) # 確保字體不會小於 16
+    font_paths = [
+        "msjh.ttc",        # Windows 微軟正黑體
+        "simhei.ttf",      # Windows 黑體
+        "PingFang.ttc",    # Mac 蘋方體
+        "STHeiti Light.ttc", # Mac 黑體
+        "NotoSansTC-Regular.otf", # 常見下載字體
+        "NotoSansTC-Regular.ttf"
+    ]
     
-    # 邊距與行距維持黃金比例 1.618 帶來的美感
-    golden_ratio = 1.618
-    margin = int(font_size * golden_ratio) 
-    line_spacing = golden_ratio            
-
-    try:
-        font = ImageFont.truetype(FONT_PATH, font_size)
-    except OSError:
-        # 為了避免找不到字體時報錯中斷，改用 st.warning 並使用預設字體
-        font = ImageFont.load_default()
-
-    # 文字換行計算
-    max_text_width = width - 2 * margin
-    lines = []
-    current_line = []
-    current_width = 0
-
-    def get_text_size_char(char, font_obj):
-        return font_obj.getlength(char)
-
-    for char in text:
-        char_width = get_text_size_char(char, font)
-        if current_width + char_width <= max_text_width:
-            current_line.append(char)
-            current_width += char_width
-        else:
-            lines.append("".join(current_line))
-            current_line = [char]
-            current_width = char_width
-    if current_line:
-        lines.append("".join(current_line))
-
-    # 計算排版高度
-    bbox = font.getbbox("測試文字") 
-    single_line_height = bbox[3] - bbox[1]
-    
-    if len(lines) == 0:
-        text_area_height = margin * 2
-    else:
-        total_text_height = single_line_height + (len(lines) - 1) * single_line_height * line_spacing
-        text_area_height = total_text_height + 2 * margin 
-
-    # 創建新圖片 (加上下方黑條)
-    new_height = height + int(text_area_height)
-    new_img = Image.new("RGB", (width, new_height), (0, 0, 0))
-    new_img.paste(img, (0, 0))
-
-    new_draw = ImageDraw.Draw(new_img)
-
-    # 繪製文字
-    current_y = height + margin
-    for line in lines:
+    for path in font_paths:
         try:
-             new_draw.text((margin, current_y), line, font=font, fill=(255, 255, 255)) 
-        except Exception:
-             pass
-        current_y += single_line_height * line_spacing
+            return ImageFont.truetype(path, size)
+        except IOError:
+            continue
+            
+    # 如果真的找不到，回傳預設（注意：預設字體無法顯示中文，會變成方塊）
+    st.warning("⚠️ 系統找不到內建的中文字體，如果文字變成方塊，請將字體檔(如 msjh.ttc) 放到同一資料夾。")
+    return ImageFont.load_default()
 
+# --- 處理圖片的函式 ---
+def process_image(img, line1, line2):
+    width, height = img.size
+    
+    # 動態計算底部黑框的高度 (照片高度的 15%，最小 100px)
+    text_bar_height = max(int(height * 0.15), 100)
+    new_height = height + text_bar_height
+    
+    # 建立一張包含黑底的新畫布
+    new_img = Image.new('RGB', (width, new_height), 'black')
+    
+    # 貼上原圖
+    new_img.paste(img, (0, 0))
+    
+    # 準備畫筆與字體
+    draw = ImageDraw.Draw(new_img)
+    font_size = max(int(width * 0.035), 20)
+    font = get_chinese_font(font_size)
+    
+    # 計算文字 Y 軸位置 (在黑框內)
+    text_y1 = height + (text_bar_height * 0.35)
+    text_y2 = height + (text_bar_height * 0.7)
+    
+    # 寫上文字 (anchor="mm" 表示以文字正中心為對齊基準)
+    # 第一行
+    if line1:
+        draw.text((width / 2, text_y1), line1, font=font, fill="white", anchor="mm")
+    # 第二行
+    if line2:
+        draw.text((width / 2, text_y2), line2, font=font, fill="white", anchor="mm")
+        
     return new_img
 
-# --- 4. Streamlit 應用程序 UI ---
+# --- UI 介面設計 ---
+st.title("📸 照片加字幕小工具")
+st.write("上傳照片並輸入資訊，一鍵產生帶有經典黑底白字說明的紀念照片！")
 
-def main():
-    # 設定網頁版面為寬屏模式，讓左右對照更清楚
-    st.set_page_config(page_title="圖文語音記錄器", page_icon="📸", layout="wide")
-    st.title("📸 語音拍立得：圖文語音記錄器")
-    st.write("上傳照片並錄音，即可在下方即時預覽並微調您的專屬圖文卡。")
+# 1. 上傳區域
+uploaded_file = st.file_uploader("1. 上傳照片", type=["jpg", "jpeg", "png"])
 
-    # --- Step 1: 圖片上傳 ---
-    uploaded_image = st.file_uploader("1. 上傳照片 (JPG/PNG)", type=["jpg", "png", "jpeg"])
+# 2. 文字輸入區域
+col1, col2 = st.columns(2)
+with col1:
+    line1_text = st.text_input("第一行文字 (如時間地點)", "2026.4.13. 新新餐廳晚餐")
+with col2:
+    line2_text = st.text_input("第二行文字 (如人物介紹)", "左起：許家輔、徐令凱夫人、徐令凱。")
 
-    if uploaded_image:
-        st.write("---")
-        st.write("2. 點擊麥克風錄製中文語音（描述這張照片）")
-        
-        # --- Step 2: 語音輸入 ---
-        audio_data = mic_recorder(
-            start_prompt="🔴 按住開始錄音",
-            stop_prompt="⏹️ 停止錄音",
-            key="mic",
-            use_container_width=False # 縮小按鈕寬度
-        )
-
-        # 當有新錄音時，進行辨識並存入 session_state
-        if audio_data and ("last_audio" not in st.session_state or st.session_state["last_audio"] != audio_data):
-            st.session_state["last_audio"] = audio_data
-            try:
-                text_result = transcribe_audio_bytes(audio_data['bytes'])
-                now = datetime.datetime.now()
-                time_prefix = now.strftime("%Y%m%d ") 
-                # 儲存原始辨識結果
-                st.session_state["transcribed_text"] = f"{time_prefix}{text_result}"
-                st.success("✅ 語音辨識完成！開始微調排版：")
-            except Exception as e:
-                st.error(f"❌ 語音轉文字發生錯誤: {e}")
-
-        # --- Step 3: 即時編輯面板與預覽 ---
-        # 只要 session_state 裡面有文字，就顯示編輯與預覽區塊
-        if "transcribed_text" in st.session_state:
-            st.write("---")
-            
-            # 建立左右兩欄，左邊是控制項，右邊是即時預覽
-            col1, col2 = st.columns([1, 1.2]) 
-
-            with col1:
-                st.subheader("⚙️ 調整與修改")
-                
-                # 1. 即時文字編輯框 (綁定 session_state 的預設值)
-                edited_text = st.text_area(
-                    "文字描述 (可直接修改)：", 
-                    value=st.session_state["transcribed_text"], 
-                    height=150
-                )
-                
-                # 2. 字體比例滑桿 (預設 1.0 倍，可調整範圍 0.5 ~ 2.5)
-                font_scale = st.slider(
-                    "🔠 調整字體顯示比例：", 
-                    min_value=0.5, 
-                    max_value=2.5, 
-                    value=1.0, 
-                    step=0.1
-                )
-                
-                st.caption("💡 提示：在上方修改文字或拖拉滑桿，右側的圖片會立刻更新！")
-
-            with col2:
-                st.subheader("👀 即時預覽與下載")
-                
-                # 每當左側的 edited_text 或 font_scale 改變，這段程式碼就會自動重新執行並產生新圖
-                with st.spinner("渲染圖片中..."):
-                    try:
-                        preview_image = combine_image_text(uploaded_image, edited_text, font_scale)
-                        
-                        # 顯示即時預覽圖
-                        st.image(preview_image, use_container_width=True)
-
-                        # 準備下載檔案
-                        buf = io.BytesIO()
-                        preview_image.save(buf, format="PNG")
-                        byte_im = buf.getvalue()
-                        now = datetime.datetime.now()
-                        file_name = f"VoiceCaption_{now.strftime('%Y%m%d_%H%M%S')}.png"
-
-                        # 下載按鈕
-                        st.download_button(
-                            label="📥 確認無誤，點擊下載最終圖片",
-                            data=byte_im,
-                            file_name=file_name,
-                            mime="image/png",
-                            use_container_width=True,
-                            type="primary"
-                        )
-                    except Exception as e:
-                         st.error(f"❌ 產生預覽圖時發生錯誤: {e}")
-
-if __name__ == "__main__":
-    main()
+# 3. 處理與顯示區域
+if uploaded_file is not None:
+    # 讀取使用者上傳的圖片
+    original_image = Image.open(uploaded_file)
+    
+    st.markdown("---")
+    st.subheader("預覽結果")
+    
+    # 產生合成圖片
+    result_image = process_image(original_image, line1_text, line2_text)
+    
+    # 顯示圖片
+    st.image(result_image, use_container_width=True)
+    
+    # 準備下載按鈕
+    # 將 PIL Image 轉換為可下載的位元組流 (BytesIO)
+    img_byte_arr = io.BytesIO()
+    result_image.save(img_byte_arr, format='JPEG', quality=95)
+    img_byte_arr = img_byte_arr.getvalue()
+    
+    st.download_button(
+        label="⬇️ 點此下載合成照片",
+        data=img_byte_arr,
+        file_name="我的紀念照片.jpg",
+        mime="image/jpeg",
+        type="primary"
+    )
