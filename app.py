@@ -104,9 +104,9 @@ angle = st.slider("細調旋轉角度", min_value=-180, max_value=180, key="angl
 st.subheader("3. 輸入文字")
 col_text1, col_text2 = st.columns(2)
 with col_text1:
-    line1_text = st.text_input("第一行文字 (如時間地點)", "2026.4.13. 新新餐廳晚餐")
+    line1_text = st.text_input("第一行文字 (如時間地點)", "2026.4.16. 地點")
 with col_text2:
-    line2_text = st.text_input("第二行文字 (如人物介紹)", "左起：許家輔、徐令凱夫人、徐令凱。")
+    line2_text = st.text_input("第二行文字 (如人物介紹)", "左起：A、B、C。")
 
 # 4. 處理與顯示區域
 if uploaded_file is not None:
