@@ -1,172 +1,111 @@
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
+import textwrap
 import io
-import os
-import urllib.parse
-import streamlit.components.v1 as components
+import platform
 
-# --- 頁面設定 ---
-st.set_page_config(page_title="老照片加字幕小工具 (Pro版)", page_icon="📸", layout="centered")
+st.set_page_config(page_title="照片加註解產生器", layout="centered")
 
-# --- 狀態管理：初始化旋轉角度 ---
-if 'angle' not in st.session_state:
-    st.session_state.angle = 0
+st.title("📸 照片加註解產生器")
+st.markdown("上傳照片後，可在下方自動生成類似拍立得黑底白字的說明列。")
 
-def rotate_ccw():
-    """逆時針旋轉 90 度"""
-    val = st.session_state.angle + 90
-    st.session_state.angle = val if val <= 180 else val - 360
+# 預設文字 (根據您的需求已經將「苗加三點水」更正為「渵」，並參考了圖2的文案)
+default_text = "圖片文字自動換行測試。"
 
-def rotate_cw():
-    """順時針旋轉 90 度"""
-    val = st.session_state.angle - 90
-    st.session_state.angle = val if val >= -180 else val + 360
+# 側邊欄：參數設定
+st.sidebar.header("排版設定")
+font_size = st.sidebar.slider("文字大小", min_value=15, max_value=100, value=40)
+chars_per_line = st.sidebar.slider("每行字數 (控制自動換行)", min_value=10, max_value=60, value=28)
+line_spacing = st.sidebar.slider("行距", min_value=0, max_value=30, value=15)
+padding = st.sidebar.slider("文字框上下留白", min_value=10, max_value=100, value=30)
 
-# --- 輔助函式：尋找中文字體 ---
-def get_chinese_font(size):
-    font_paths = [
-        "msjh.ttc",        # Windows 微軟正黑體
-        "simhei.ttf",      # Windows 黑體
-        "PingFang.ttc",    # Mac 蘋方體
-        "STHeiti Light.ttc", # Mac 黑體
-        "NotoSansTC-Regular.otf", 
-        "NotoSansTC-Regular.ttf"
-    ]
-    for path in font_paths:
-        try:
-            return ImageFont.truetype(path, size)
-        except IOError:
-            continue
-    st.warning("⚠️ 系統找不到內建的中文字體，如果文字變成方塊，請將字體檔放到同一資料夾。")
-    return ImageFont.load_default()
+font_path_input = st.sidebar.text_input(
+    "自訂字體檔案路徑 (留空則自動偵測系統字體)", 
+    help="若中文顯示為方塊，請將中文字體 (如 font.ttf) 放在同資料夾並輸入檔名"
+)
 
-# --- 處理圖片的函式 ---
-def process_image(img, line1, line2, angle, font_size_mult):
-    # 1. 旋轉原照片 (expand=True 確保旋轉後照片不被裁切)
-    rotated_img = img.rotate(angle, expand=True)
-    width, height = rotated_img.size
-    
-    # 動態計算底部黑框的高度
-    text_bar_height = max(int(height * 0.15), 100)
-    new_height = height + text_bar_height
-    
-    # 建立一張包含黑底的新畫布
-    new_img = Image.new('RGB', (width, new_height), 'black')
-    
-    # 居中貼上旋轉後的原圖
-    paste_x = (new_img.width - rotated_img.width) // 2
-    paste_y = 0
-    new_img.paste(rotated_img, (paste_x, paste_y))
-    
-    # 準備畫筆與字體
-    draw = ImageDraw.Draw(new_img)
-    base_font_size = max(int(width * 0.035), 20)
-    target_font_size = int(base_font_size * font_size_mult)
-    font = get_chinese_font(target_font_size)
-    
-    # 計算文字位置
-    text_bar_start_y = height
-    text_y1 = text_bar_start_y + (text_bar_height * 0.35)
-    text_y2 = text_bar_start_y + (text_bar_height * 0.7)
-    
-    # 寫上文字
-    if line1:
-        draw.text((width / 2, text_y1), line1, font=font, fill="white", anchor="mm")
-    if line2:
-        draw.text((width / 2, text_y2), line2, font=font, fill="white", anchor="mm")
-        
-    return new_img
+# 主畫面：上傳與文字輸入
+uploaded_file = st.file_uploader("1. 請上傳照片", type=['jpg', 'jpeg', 'png'])
+text = st.text_area("2. 輸入要壓在底部的文字", default_text, height=100)
 
-# --- UI 介面設計 ---
-st.title("📸 照片加字幕小工具 (Pro版)")
-st.write("上傳照片，自定義角度與文字大小，並生成帶有黑底白字說明的紀念照片！")
-
-# 1. 上傳區域
-uploaded_file = st.file_uploader("1. 上傳照片", type=["jpg", "jpeg", "png"])
-
-# 2. 控件區域
-st.subheader("2. 自定義設置")
-
-# 使用欄位排版：左邊放兩個旋轉按鈕，右邊放文字放大滑桿
-col_btn1, col_btn2, col_font = st.columns([1, 1, 2])
-with col_btn1:
-    st.button("↺ 左轉 90度", on_click=rotate_ccw, use_container_width=True)
-with col_btn2:
-    st.button("↻ 右轉 90度", on_click=rotate_cw, use_container_width=True)
-with col_font:
-    font_size_mult = st.slider("文字放大縮小倍率", min_value=0.5, max_value=2.0, value=1.0, step=0.1)
-
-# 加入綁定 session_state 的細調滑桿
-# key="angle" 會自動讀取/寫入 st.session_state.angle，與上面的按鈕完美連動
-angle = st.slider("細調旋轉角度", min_value=-180, max_value=180, key="angle", step=1)
-
-# 3. 文字輸入區域
-st.subheader("3. 輸入文字")
-col_text1, col_text2 = st.columns(2)
-with col_text1:
-    line1_text = st.text_input("第一行文字 (如時間地點)", "2026.4.16. 地點")
-with col_text2:
-    line2_text = st.text_input("第二行文字 (如人物介紹)", "左起：A、B、C。")
-
-# 4. 處理與顯示區域
 if uploaded_file is not None:
-    original_image = Image.open(uploaded_file)
+    # 顯示原圖
+    image = Image.open(uploaded_file)
+    st.image(image, caption="原始照片", use_container_width=True)
     
-    st.markdown("---")
-    st.subheader("預覽結果")
-    
-    # 產生合成圖片
-    result_image = process_image(original_image, line1_text, line2_text, angle, font_size_mult)
-    st.image(result_image, use_container_width=True)
-    
-    # 準備下載按鈕
-    img_byte_arr = io.BytesIO()
-    result_image.save(img_byte_arr, format='JPEG', quality=95)
-    img_byte_arr = img_byte_arr.getvalue()
-    
-    st.download_button(
-        label="⬇️ 點此下載合成照片",
-        data=img_byte_arr,
-        file_name="我的紀念照片.jpg",
-        mime="image/jpeg",
-        type="primary"
-    )
+    if st.button("✨ 生成照片", type="primary"):
+        try:
+            # 1. 決定字體
+            font = None
+            if font_path_input:
+                try:
+                    font = ImageFont.truetype(font_path_input, font_size)
+                except IOError:
+                    st.error("找不到您指定的字體檔，將嘗試使用系統預設。")
+            
+            if font is None:
+                sys_plat = platform.system()
+                try:
+                    if sys_plat == "Windows":
+                        font = ImageFont.truetype("msjh.ttc", font_size)  # 微軟正黑體
+                    elif sys_plat == "Darwin":
+                        font = ImageFont.truetype("PingFang.ttc", font_size)  # Mac 蘋方體
+                    else:
+                        # Linux 預設抓取
+                        font = ImageFont.truetype("wqy-microhei.ttc", font_size) 
+                except IOError:
+                    st.error("無法載入系統中文字體！請手動下載 .ttf 中文字體檔，並在左側欄位輸入其檔名。")
+                    st.stop()
 
-    # 5. 分享區域
-    st.markdown("---")
-    st.subheader("4. 分享小工具")
-    st.write("如果覺得好用，可以把這個小工具分享給親朋好友！")
-    st.write("*(提醒：要分享剛製作好的照片，請先點擊上方按鈕下載圖片，再到 LINE 或 Facebook 傳送圖片喔)*")
+            # 2. 處理文字換行
+            lines = []
+            for paragraph in text.split('\n'):
+                # 使用 textwrap 自動把過長的句子截斷換行
+                lines.extend(textwrap.wrap(paragraph, width=chars_per_line))
+            wrapped_text = '\n'.join(lines)
 
-    # 更新為你指定的網址
-    share_url = "https://imagetxt.streamlit.io"
-    share_text = "我發現一個超好用的「照片加字幕小工具」，可以輕鬆製作像老照片一樣的黑底白字紀念照，快來試試看！"
-    
-    # 對文字和 URL 進行 URL 編碼
-    encoded_text = urllib.parse.quote(share_text)
-    encoded_url = urllib.parse.quote(share_url)
+            # 3. 計算文字所佔用的高度
+            dummy_img = Image.new('RGB', (1, 1))
+            draw_dummy = ImageDraw.Draw(dummy_img)
+            bbox = draw_dummy.multiline_textbbox((0, 0), wrapped_text, font=font, spacing=line_spacing)
+            text_height = bbox[3] - bbox[1]
 
-    # 生成分享連結
-    line_share_link = f"https://line.me/R/msg/text/?{encoded_text}%0A{encoded_url}"
-    fb_share_link = f"https://www.facebook.com/sharer/sharer.php?u={encoded_url}"
+            img_width, img_height = image.size
+            caption_height = text_height + (padding * 2)
 
-    # 嵌入 HTML 按鈕
-    html_string = f"""
-    <style>
-        .share-buttons {{ display: flex; gap: 10px; margin-top: 10px; }}
-        .share-button {{
-            display: inline-flex; align-items: center; justify-content: center;
-            padding: 8px 16px; border-radius: 5px; font-size: 14px;
-            font-weight: bold; text-decoration: none; color: white;
-            cursor: pointer; transition: opacity 0.2s; font-family: sans-serif;
-        }}
-        .share-button:hover {{ opacity: 0.8; }}
-        .line {{ background-color: #00B900; }}
-        .facebook {{ background-color: #1877F2; }}
-    </style>
-    <div class="share-buttons">
-        <a href="{line_share_link}" target="_blank" class="share-button line">分享網址到 LINE</a>
-        <a href="{fb_share_link}" target="_blank" class="share-button facebook">分享網址到 Facebook</a>
-    </div>
-    """
-    components.html(html_string, height=60)
+            # 4. 建立新圖片 (寬度不變，高度為：原圖高度 + 黑底文字區高度)
+            new_img = Image.new('RGB', (img_width, img_height + caption_height), color='black')
+            
+            # 將原圖貼在上方 (0, 0)
+            new_img.paste(image, (0, 0))
+
+            # 5. 在黑色區域畫上白色文字
+            draw = ImageDraw.Draw(new_img)
+            draw.multiline_text(
+                (img_width / 2, img_height + padding),  # 座標起點(水平置中，垂直為原圖底部往下加 padding)
+                wrapped_text,
+                fill="white",                           # 字體顏色
+                font=font,
+                anchor="ma",                            # 置中對齊基準點 (middle-ascender)
+                align="center",                         # 多行文字置中
+                spacing=line_spacing                    # 行距
+            )
+
+            # 6. 顯示結果並提供下載
+            st.success("✅ 照片生成成功！")
+            st.image(new_img, caption="生成的照片", use_container_width=True)
+
+            # 將 PIL Image 轉換為 byte 以便下載
+            buf = io.BytesIO()
+            new_img.save(buf, format="JPEG", quality=95)
+            byte_im = buf.getvalue()
+            
+            st.download_button(
+                label="📥 下載生成的照片",
+                data=byte_im,
+                file_name="event_photo_with_caption.jpg",
+                mime="image/jpeg"
+            )
+
+        except Exception as e:
+            st.error(f"發生錯誤: {e}")
